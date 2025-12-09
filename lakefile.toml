@@ -1,0 +1,7 @@
+name = "lush"
+version = "0.1.0"
+defaultTargets = ["lush"]
+
+[[lean_exe]]
+name = "lush"
+root = "Main"
