@@ -199,16 +199,34 @@ def sha256 {n : Nat} (message : BitVec n) (hlen : n < 2^64) : BitVec 256 :=
     rw [←hlen]
     exact concatBitVecArray finalState.hash
 
-example : sha256 0#0 (by grind) = 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855#256 := by
-  native_decide
+@[grind! .]
+theorem String.utf8LengthBoundedByLength (s : String) : s.utf8ByteSize ≤ 4*s.length := by
+  apply String.push_induction
+    (motive := fun s => s.utf8ByteSize ≤ 4*s.length)
+  · simp
+  · intro s c ih
+    rw [String.length_push]
+    rw [String.utf8ByteSize_push]
+    have h : c.utf8Size ≤ 4 := by apply Char.utf8Size_le_four
+    grind
 
-def sha256String (input : String) : BitVec 256 :=
+def sha256String (input : String) (hlen : input.length < 2^59) : BitVec 256 :=
   let f := fun x => BitVec.ofNat 8 (UInt8.toNat x)
   let bv := concatBitVecArray (input.toUTF8.data.map f)
-  -- Come on, we're not having a string of length 2^62...
-  sha256 bv sorry
+  have hlen : (input.toUTF8.data.map f).size * 8 < 2^64 := by
+    simp [Array.size_map]
+    have h : input.utf8ByteSize ≤ 4 *input.length := by apply String.utf8LengthBoundedByLength
+    grind
+  sha256 bv hlen
 
-example : sha256String (String.join (List.replicate 256 "HELLO")) = 0x8dc54998040d81bf0a1a317085396869292a285864c6080d3e40aec35ebea923#256 := by
+example :
+    sha256 0#0 (by grind)
+    = 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855#256 := by
+  native_decide
+
+example :
+    sha256String (String.join (List.replicate 256 "HELLO")) (by sorry)
+    = 0x8dc54998040d81bf0a1a317085396869292a285864c6080d3e40aec35ebea923#256 := by
   native_decide
 
 end Lush.Crypto.SHA
