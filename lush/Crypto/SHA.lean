@@ -183,21 +183,43 @@ def shaRound (state : ShaState) (block : ShaBlock) : ShaState :=
   have hhashlen : hash.size = 8 := by unfold hash; simp; exact state.hhashlen
   { hash := hash, hhashlen := hhashlen }
 
-def messageToBlocks {n : Nat} (message : BitVec n) (hlen : n < 2^64) : Array ShaBlock :=
-  let ⟨paddingLen, padding, _⟩ := padding n hlen
-  let toEncode : BitVec (n + paddingLen) := message ++ padding
-  let numBlocks := (n + paddingLen) / 512
+def byteArrayToBitVec'
+    (b : ByteArray)
+    (i : Nat)
+    (hi : i ≤ b.size)
+    (acc : BitVec (8 * i)) : BitVec (8 * b.size) :=
+  if heq : i = b.size
+  then by rw [←heq]; exact acc
+  else
+    have hi : (i+1) ≤ b.size := by omega
+    let acc := acc ++ (BitVec.ofNat 8 (UInt8.toNat b[i]))
+    byteArrayToBitVec' b (i+1) hi acc
+
+def byteArrayToBitVec (b : ByteArray) : BitVec (8 * b.size) :=
+  byteArrayToBitVec' b 0 (by simp) (BitVec.ofNat 0 0)
+
+def messageToBlocks (message : ByteArray) (hlen : message.size < 2^61) : Array ShaBlock :=
+  let n := message.size
+  let ⟨paddingLen, padding, _⟩ := padding (8*n) (by omega)
+  let numBlocks := (8*n + paddingLen) / 512
   Array.finRange numBlocks |>.map fun (i : Fin numBlocks) =>
-    let block := toEncode.extractLsb' (n + paddingLen - (i + 1) * 512) 512
+    let blockBytes := message.extract (i*64) ((i+1)*64)
+    let block : BitVec 512 :=
+      if hblocklen : blockBytes.size = 64
+      then (byteArrayToBitVec blockBytes).cast (by simp [hblocklen])
+      else
+        let block :=
+          byteArrayToBitVec blockBytes
+          |>.setWidth 512
+          |>.shiftLeft (512 - 8 * blockBytes.size)
+        block ||| padding.setWidth 512
     ShaBlock.ofBits block
 
-def sha256 {n : Nat} (message : BitVec n) (hlen : n < 2^64) : BitVec 256 :=
+def sha256 (message : ByteArray) (hlen : message.size < 2^61) : BitVec 256 :=
   let blocks := messageToBlocks message hlen
   let finalState := blocks.foldl shaRound ShaState.initial
   have hlen : finalState.hash.size * 32 = 256 := by simp [finalState.hhashlen]
-  by
-    rw [←hlen]
-    exact concatBitVecArray finalState.hash
+  (concatBitVecArray finalState.hash).cast (by simp [hlen])
 
 @[grind! .]
 theorem String.utf8LengthBoundedByLength (s : String) : s.utf8ByteSize ≤ 4*s.length := by
@@ -212,15 +234,15 @@ theorem String.utf8LengthBoundedByLength (s : String) : s.utf8ByteSize ≤ 4*s.l
 
 def sha256String (input : String) (hlen : input.length < 2^59) : BitVec 256 :=
   let f := fun x => BitVec.ofNat 8 (UInt8.toNat x)
-  let bv := concatBitVecArray (input.toUTF8.data.map f)
-  have hlen : (input.toUTF8.data.map f).size * 8 < 2^64 := by
-    simp [Array.size_map]
-    have h : input.utf8ByteSize ≤ 4 *input.length := by apply String.utf8LengthBoundedByLength
+  let ba := input.toUTF8
+  have hlen : input.toUTF8.size < 2^61 := by
+    have h : input.utf8ByteSize ≤ 4 * input.length := by apply String.utf8LengthBoundedByLength
+    simp
     grind
-  sha256 bv hlen
+  sha256 ba hlen
 
 example :
-    sha256 0#0 (by grind)
+    sha256 ByteArray.empty (by simp)
     = 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855#256 := by
   native_decide
 
