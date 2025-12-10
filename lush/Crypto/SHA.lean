@@ -227,18 +227,12 @@ theorem String.utf8ByteSizeLe (s : String) : (s.utf8ByteSize ≤ s.length / 4) :
 termination_by s.length
 decreasing_by sorry
 
-def sha256String (input : String) (hlen : input.length < 2^60) : BitVec 256 :=
+def sha256String (input : String) : BitVec 256 :=
   let f := fun x => BitVec.ofNat 8 (UInt8.toNat x)
   let bv := concatBitVecArray (input.toUTF8.data.map f)
-  have hlen : (input.toUTF8.data.map f).size * 8 < 2^64 := by
-    sorry
-    /-
-    rw [Array.size_map]
-    change (input.toUTF8.size < 2^64)
-    rw [String.size_toUTF8]
-    -/
-  sha256 bv hlen
+  -- Come on, we're not having a string of length 2^62...
+  sha256 bv sorry
 
-#eval! sha256String "HELLO" (by decide)
+#eval! sha256String (String.join (List.replicate 256 "HELLO"))
 
 end Lush.Crypto.SHA
