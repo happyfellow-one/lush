@@ -65,9 +65,21 @@ def shaK : Array (BitVec 32) :=
    , 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
    ]
 
+theorem shaK_size : shaK.size = 64 := by simp [shaK]
+
 structure ShaBlock where
   block : Array (BitVec 32)
   hlen : block.size = 16 := by grind
+
+def ShaBlock.ofBits (b : BitVec 512) : ShaBlock :=
+  let block : Array (BitVec 32) :=
+    Array.range (512/32) |>.map fun i =>
+      have heq : (((i+1)*32-1) - i*32 + 1) = 32 := by omega
+      heq ▸ (b.extractLsb ((i+1)*32-1) (i*32))
+  have hlen : block.size = 16 := by
+    unfold block
+    rw [Array.size_map, Array.size_range]
+  { block, hlen := hlen }
 
 structure MessageSchedule where
   schedule : Array (BitVec 32)
@@ -94,40 +106,122 @@ structure ShaState where
   hash : Array (BitVec 32)
   hhashlen : hash.size = 8 := by grind
 
-set_option diagnostics true
+def ShaState.initial : ShaState :=
+  let hash : Array (BitVec 32) :=
+    #[  0x6a09e667
+      , 0xbb67ae85
+      , 0x3c6ef372
+      , 0xa54ff53a
+      , 0x510e527f
+      , 0x9b05688c
+      , 0x1f83d9ab
+      , 0x5be0cd19 ]
+  have hhashlen : hash.size = 8 := by simp [hash]
+  { hash := hash }
 
 def shaRound (state : ShaState) (block : ShaBlock) : ShaState :=
   let schedule := messageSchedule block
-  let working := state.hash
   let f (working : { a : Array (BitVec 32) // a.size = 8 }) (i : Fin 64) :=
     let ⟨working, hworkinglen⟩ := working
     have hschedulelen := schedule.hlen
+    let getWorking (i : Fin 8) := working[i]'(by rw [hworkinglen]; apply Fin.is_lt i)
     let T1 :=
-      working[7]
-      + shaSigma₁ working[4]
-      + shaCh working[4] working[5] working[6]
+      getWorking 7
+      + shaSigma₁ (getWorking 4)
+      + shaCh (getWorking 4) (getWorking 5) (getWorking 6)
       + shaK[i.val]
-      + schedule.schedule[i.val]
+      + schedule.schedule[i.val]'(by simp [schedule.hlen])
     let T2 :=
-      shaSigma₀ working[0]
-      + shaMaj working[0] working[1] working[2]
+      shaSigma₀ (getWorking 0)
+      + shaMaj (getWorking 0) (getWorking 1) (getWorking 2)
     let working :=
       #[ T1 + T2
-       , working[0]
-       , working[1]
-       , working[2]
-       , working[3] + T1
-       , working[4]
-       , working[5]
-       , working[6]
+       , getWorking 0
+       , getWorking 1
+       , getWorking 2
+       , getWorking 3 + T1
+       , getWorking 4
+       , getWorking 5
+       , getWorking 6
       ]
-    ⟨working, by trivial⟩
-  let working := (List.finRange 64).foldl f ⟨working, state.hhashlen⟩
-  have hworkinglen : working.val.size = 8 := by sorry
+    have hworkinglen : working.size = 8 := by simp [working]
+    ⟨working, hworkinglen⟩
+  let working := (List.finRange 64).foldl f ⟨state.hash, state.hhashlen⟩
+  have hworkinglen : working.val.size = 8 := by exact working.property
   let hash :=
-    have hhashlen : state.hash.size = 8 := state.hhashlen
-    Array.mapFinIdx state.hash (fun i a hi => a + working.val[i])
+    Array.mapFinIdx state.hash (fun i a hi =>
+      have hlen : i < working.val.size := by
+        rw [working.property]; rw [state.hhashlen] at hi; trivial
+      a + working.val[i]
+    )
   have hhashlen : hash.size = 8 := by unfold hash; simp; exact state.hhashlen
   { hash := hash, hhashlen := hhashlen }
+
+def messageToBlocks {n : Nat} (message : BitVec n) (hlen : n < 2^64) : Array ShaBlock :=
+  let ⟨paddingLen, padding, _⟩ := padding n hlen
+  let toEncode : BitVec (n + paddingLen) := message ++ padding
+  let numBlocks := (n + paddingLen) / 512
+  Array.range numBlocks |>.map fun i =>
+    let block := toEncode.extractLsb' (i * 512) 512
+    ShaBlock.ofBits block
+
+def concatBitVecArray'
+    {n : Nat}
+    (a : Array (BitVec n))
+    (i : Nat)
+    (hlen : i ≤ a.size)
+    (acc : BitVec (i * n)) : BitVec (a.size * n) :=
+  if heq : i = a.size
+  then by rw [←heq]; exact acc
+  else
+    have hlen : i < a.size := by omega
+    have heq : (i + 1) * n = i * n + n := by
+      rw [Nat.mul_comm, Nat.mul_add]; simp; rw [Nat.mul_comm]
+    let acc : BitVec ((i + 1) * n) :=  by
+      rw [heq]
+      exact acc ++ a[i]
+    have hlen : i + 1 ≤ a.size := by omega
+    concatBitVecArray' a (i+1) hlen acc
+
+def concatBitVecArray {n : Nat} (a : Array (BitVec n)) : BitVec (a.size * n) :=
+  concatBitVecArray' a 0 (by simp) (by simp; exact BitVec.ofNat 0 0)
+
+def sha256 {n : Nat} (message : BitVec n) (hlen : n < 2^64) : BitVec 256 :=
+  let blocks := messageToBlocks message hlen
+  let finalState := blocks.foldl shaRound ShaState.initial
+  have hlen : finalState.hash.size * 32 = 256 := by simp [finalState.hhashlen]
+  by
+    rw [←hlen]
+    exact concatBitVecArray finalState.hash
+
+theorem String.utf8ByteSizeLe (s : String) : (s.utf8ByteSize ≤ s.length / 4) :=  by
+  if heq : s.length = 0
+  then
+    have hempty : s = "" := by admit
+    simp [hempty, String.utf8ByteSize, String.utf8ByteSize.go]
+  else
+    let startPos := String.Pos.mk 1
+    let stopPos := String.Pos.mk s.length
+    let substring := s.extract startPos stopPos
+    have ih : substring.utf8ByteSize ≤ substring.length / 4 := by
+      apply (utf8ByteSizeLe substring)
+    unfold substring at ih
+    admit
+termination_by s.length
+decreasing_by sorry
+
+def sha256String (input : String) (hlen : input.length < 2^60) : BitVec 256 :=
+  let f := fun x => BitVec.ofNat 8 (UInt8.toNat x)
+  let bv := concatBitVecArray (input.toUTF8.data.map f)
+  have hlen : (input.toUTF8.data.map f).size * 8 < 2^64 := by
+    sorry
+    /-
+    rw [Array.size_map]
+    change (input.toUTF8.size < 2^64)
+    rw [String.size_toUTF8]
+    -/
+  sha256 bv hlen
+
+#eval! sha256String "HELLO" (by decide)
 
 end Lush.Crypto.SHA
