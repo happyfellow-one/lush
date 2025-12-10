@@ -107,16 +107,6 @@ def concatBitVecArray'
 def concatBitVecArray {n : Nat} (a : Array (BitVec n)) : BitVec (a.size * n) :=
   concatBitVecArray' a 0 (by simp) (by simp; exact BitVec.ofNat 0 0)
 
-theorem ShaBlocks.ofBits_sound (b : BitVec 512) (hlen : (ShaBlock.ofBits b).block.size * 32 = 512) :
-    concatBitVecArray (ShaBlock.ofBits b).block =
-     hlen ▸ b := by
-  ext i hi
-  unfold concatBitVecArray
-  repeat (unfold concatBitVecArray'; simp [(ShaBlock.ofBits b).hlen])
-  --rw [←BitVec.append_eq]
-  --simp [←BitVec.append_eq, BitVec.append]
-  sorry
-
 structure MessageSchedule where
   schedule : Array (BitVec 32)
   hlen : schedule.size = 64 := by grind
@@ -209,23 +199,8 @@ def sha256 {n : Nat} (message : BitVec n) (hlen : n < 2^64) : BitVec 256 :=
     rw [←hlen]
     exact concatBitVecArray finalState.hash
 
-#eval sha256 0#0 (by grind)
-
-theorem String.utf8ByteSizeLe (s : String) : (s.utf8ByteSize ≤ s.length / 4) :=  by
-  if heq : s.length = 0
-  then
-    have hempty : s = "" := by admit
-    simp [hempty, String.utf8ByteSize, String.utf8ByteSize.go]
-  else
-    let startPos := String.Pos.mk 1
-    let stopPos := String.Pos.mk s.length
-    let substring := s.extract startPos stopPos
-    have ih : substring.utf8ByteSize ≤ substring.length / 4 := by
-      apply (utf8ByteSizeLe substring)
-    unfold substring at ih
-    admit
-termination_by s.length
-decreasing_by sorry
+example : sha256 0#0 (by grind) = 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855#256 := by
+  native_decide
 
 def sha256String (input : String) : BitVec 256 :=
   let f := fun x => BitVec.ofNat 8 (UInt8.toNat x)
@@ -233,6 +208,7 @@ def sha256String (input : String) : BitVec 256 :=
   -- Come on, we're not having a string of length 2^62...
   sha256 bv sorry
 
-#eval! sha256String (String.join (List.replicate 256 "HELLO"))
+example : sha256String (String.join (List.replicate 256 "HELLO")) = 0x8dc54998040d81bf0a1a317085396869292a285864c6080d3e40aec35ebea923#256 := by
+  native_decide
 
 end Lush.Crypto.SHA
