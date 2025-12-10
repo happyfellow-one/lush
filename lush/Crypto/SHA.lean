@@ -16,12 +16,17 @@ def paddingNoLength (length : Nat) (hlen : length < 2^64) :
   let prf : (length + n) % 512 = 448 := by grind
   ⟨n, b, prf⟩
 
+example : (paddingNoLength 447 (by grind)).2.1 = 0x1#1 := by native_decide
+example : (paddingNoLength 446 (by grind)).2.1 = 0b10#2 := by native_decide
+
 def padding (length : Nat) (hlen : length < 2^64) :
     Σ n, BitVec n ×' ((length + n) % 512 = 0) :=
   let ⟨n, b, h⟩ := paddingNoLength length hlen
   let lenBv := BitVec.ofNat 64 length
   have h' : (length + n + 64) % 512 = 0 := by grind
   ⟨n + 64, BitVec.append b lenBv, h'⟩
+
+#eval (padding 447 (by grind)).2.1
 
 def shaCh (x y z : BitVec 32) : BitVec 32 := (x &&& y) ||| (~~~x &&& z)
 def shaMaj (x y z : BitVec 32) : BitVec 32 := (x &&& y) ^^^ (x &&& z) ^^^ (y &&& z)
@@ -73,13 +78,44 @@ structure ShaBlock where
 
 def ShaBlock.ofBits (b : BitVec 512) : ShaBlock :=
   let block : Array (BitVec 32) :=
-    Array.range (512/32) |>.map fun i =>
-      have heq : (((i+1)*32-1) - i*32 + 1) = 32 := by omega
-      heq ▸ (b.extractLsb ((i+1)*32-1) (i*32))
+    Array.finRange 16 |>.map fun (i : Fin 16) =>
+      let start := 512 - (i.toNat + 1)*32
+      (b.extractLsb' start 32)
   have hlen : block.size = 16 := by
     unfold block
-    rw [Array.size_map, Array.size_range]
+    rw [Array.size_map, Array.size_finRange]
   { block, hlen := hlen }
+
+def concatBitVecArray'
+    {n : Nat}
+    (a : Array (BitVec n))
+    (i : Nat)
+    (hlen : i ≤ a.size)
+    (acc : BitVec (i * n)) : BitVec (a.size * n) :=
+  if heq : i = a.size
+  then by rw [←heq]; exact acc
+  else
+    have hlen : i < a.size := by omega
+    have heq : (i + 1) * n = i * n + n := by
+      rw [Nat.mul_comm, Nat.mul_add]; simp; rw [Nat.mul_comm]
+    let acc : BitVec ((i + 1) * n) :=  by
+      rw [heq]
+      exact acc ++ a[i]
+    have hlen : i + 1 ≤ a.size := by omega
+    concatBitVecArray' a (i+1) hlen acc
+
+def concatBitVecArray {n : Nat} (a : Array (BitVec n)) : BitVec (a.size * n) :=
+  concatBitVecArray' a 0 (by simp) (by simp; exact BitVec.ofNat 0 0)
+
+theorem ShaBlocks.ofBits_sound (b : BitVec 512) (hlen : (ShaBlock.ofBits b).block.size * 32 = 512) :
+    concatBitVecArray (ShaBlock.ofBits b).block =
+     hlen ▸ b := by
+  ext i hi
+  unfold concatBitVecArray
+  repeat (unfold concatBitVecArray'; simp [(ShaBlock.ofBits b).hlen])
+  --rw [←BitVec.append_eq]
+  --simp [←BitVec.append_eq, BitVec.append]
+  sorry
 
 structure MessageSchedule where
   schedule : Array (BitVec 32)
@@ -161,30 +197,9 @@ def messageToBlocks {n : Nat} (message : BitVec n) (hlen : n < 2^64) : Array Sha
   let ⟨paddingLen, padding, _⟩ := padding n hlen
   let toEncode : BitVec (n + paddingLen) := message ++ padding
   let numBlocks := (n + paddingLen) / 512
-  Array.range numBlocks |>.map fun i =>
-    let block := toEncode.extractLsb' (i * 512) 512
+  Array.finRange numBlocks |>.map fun (i : Fin numBlocks) =>
+    let block := toEncode.extractLsb' (n + paddingLen - (i + 1) * 512) 512
     ShaBlock.ofBits block
-
-def concatBitVecArray'
-    {n : Nat}
-    (a : Array (BitVec n))
-    (i : Nat)
-    (hlen : i ≤ a.size)
-    (acc : BitVec (i * n)) : BitVec (a.size * n) :=
-  if heq : i = a.size
-  then by rw [←heq]; exact acc
-  else
-    have hlen : i < a.size := by omega
-    have heq : (i + 1) * n = i * n + n := by
-      rw [Nat.mul_comm, Nat.mul_add]; simp; rw [Nat.mul_comm]
-    let acc : BitVec ((i + 1) * n) :=  by
-      rw [heq]
-      exact acc ++ a[i]
-    have hlen : i + 1 ≤ a.size := by omega
-    concatBitVecArray' a (i+1) hlen acc
-
-def concatBitVecArray {n : Nat} (a : Array (BitVec n)) : BitVec (a.size * n) :=
-  concatBitVecArray' a 0 (by simp) (by simp; exact BitVec.ofNat 0 0)
 
 def sha256 {n : Nat} (message : BitVec n) (hlen : n < 2^64) : BitVec 256 :=
   let blocks := messageToBlocks message hlen
@@ -193,6 +208,8 @@ def sha256 {n : Nat} (message : BitVec n) (hlen : n < 2^64) : BitVec 256 :=
   by
     rw [←hlen]
     exact concatBitVecArray finalState.hash
+
+#eval sha256 0#0 (by grind)
 
 theorem String.utf8ByteSizeLe (s : String) : (s.utf8ByteSize ≤ s.length / 4) :=  by
   if heq : s.length = 0
