@@ -75,6 +75,7 @@ theorem shaK_size : shaK.size = 64 := by simp [shaK]
 structure ShaBlock where
   block : Array (BitVec 32)
   hlen : block.size = 16 := by grind
+deriving Repr
 
 def ShaBlock.ofBits (b : BitVec 512) : ShaBlock :=
   let block : Array (BitVec 32) :=
@@ -198,22 +199,33 @@ def byteArrayToBitVec'
 def byteArrayToBitVec (b : ByteArray) : BitVec (8 * b.size) :=
   byteArrayToBitVec' b 0 (by simp) (BitVec.ofNat 0 0)
 
+-- If n % 8 != 0, then it'll be left padded with enough 0 bits on the left
+-- (the hsb side).
+def bitVecToByteArray {n : Nat} (b : BitVec n) : ByteArray :=
+  let n' := (n + 7) / 8
+  let b' : BitVec (8 * n') := b.setWidth (8 * n')
+  Id.run do
+    let mut out := ByteArray.empty
+    for i in [0:n'] do
+      let byte := (b' >>> (8*n' - 8 * (i + 1))).toNat &&& 0xFF |> UInt8.ofNat
+      out := out.push byte
+    return out
+
+example : bitVecToByteArray (0b1010101010#10 : BitVec 10) = ByteArray.mk #[2, 170] := by
+  native_decide
+
 def messageToBlocks (message : ByteArray) (hlen : message.size < 2^61) : Array ShaBlock :=
   let n := message.size
   let ⟨paddingLen, padding, _⟩ := padding (8*n) (by omega)
-  let numBlocks := (8*n + paddingLen) / 512
+  let messageWithPadding := message ++ bitVecToByteArray padding
+  let numBlocks := messageWithPadding.size / 64
   Array.finRange numBlocks |>.map fun (i : Fin numBlocks) =>
-    let blockBytes := message.extract (i*64) ((i+1)*64)
-    let block : BitVec 512 :=
-      if hblocklen : blockBytes.size = 64
-      then (byteArrayToBitVec blockBytes).cast (by simp [hblocklen])
-      else
-        let block :=
-          byteArrayToBitVec blockBytes
-          |>.setWidth 512
-          |>.shiftLeft (512 - 8 * blockBytes.size)
-        block ||| padding.setWidth 512
-    ShaBlock.ofBits block
+    let blockBytes := messageWithPadding.extract (i*64) ((i+1)*64)
+    have blockBytesLen : blockBytes.size = 64 := by
+      unfold blockBytes
+      rw [ByteArray.size_extract]
+      omega
+    ShaBlock.ofBits ((byteArrayToBitVec blockBytes).cast (by omega))
 
 def sha256 (message : ByteArray) (hlen : message.size < 2^61) : BitVec 256 :=
   let blocks := messageToBlocks message hlen
@@ -249,6 +261,11 @@ example :
 example :
     sha256String (String.join (List.replicate 256 "HELLO")) (by sorry)
     = 0x8dc54998040d81bf0a1a317085396869292a285864c6080d3e40aec35ebea923#256 := by
+  native_decide
+
+example :
+    sha256String (String.join (List.replicate 2 "12345678901234567890123456789")) (by sorry)
+    = 0xf55913b97a0c310ac5a5df4889c0c71474e6437e387f3cf1d6f074f6405fbf94#256 := by
   native_decide
 
 end Lush.Crypto.SHA
