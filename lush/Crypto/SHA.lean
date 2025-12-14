@@ -1,3 +1,4 @@
+import Lush.Crypto.BitOperations
 /-!
 # SHA-256 Implementation
 
@@ -34,24 +35,6 @@ def paddingNoLength (length : Nat) : {b : ByteArray // (length + b.size) % 64 = 
 
 example : (paddingNoLength 55).1 = ByteArray.mk #[0x80] := by native_decide
 example : (paddingNoLength 54).1 = ByteArray.mk #[0x80, 0x00] := by native_decide
-
-def UInt64.toArrayBE (n : UInt64) : Array UInt8 :=
-  #[ (n >>> (8 * 7)).toUInt8
-   , (n >>> (8 * 6)).toUInt8
-   , (n >>> (8 * 5)).toUInt8
-   , (n >>> (8 * 4)).toUInt8
-   , (n >>> (8 * 3)).toUInt8
-   , (n >>> (8 * 2)).toUInt8
-   , (n >>> (8 * 1)).toUInt8
-   , (n >>> (8 * 0)).toUInt8
-  ]
-
-def UInt32.toArrayBE (n : UInt32) : Array UInt8 :=
-  #[ (n >>> (8 * 3)).toUInt8
-   , (n >>> (8 * 2)).toUInt8
-   , (n >>> (8 * 1)).toUInt8
-   , (n >>> (8 * 0)).toUInt8
-  ]
 
 def padding (length : Nat) : {b : ByteArray // (length + b.size) % 64 = 0} :=
   let ⟨b, h⟩ := paddingNoLength length
