@@ -1,32 +1,64 @@
+/-!
+# SHA-256 Implementation
+
+Performance is probably abysmal, there's just byte-level support.
+
+Even though SHA-256 is specified only for inputs of less than 2^64
+bits, the function does not check the length nor require a proof
+that the length is in bounds: it'll produce "incorrect" output
+(although you can also treat it as an extension to SHA-256, whatever
+floats your boat).
+
+All length variables are specified in bytes.
+-/
+
 namespace Lush.Crypto.SHA
 
 open Std
 open BitVec
 
--- We implement just the SHA-256 version.
-
-def paddingNoLength (length : Nat) (hlen : length < 2^64) :
-    Σ n, BitVec n ×' ((length + n) % 512 = 448) :=
+def paddingNoLength (length : Nat) : {b : ByteArray // (length + b.size) % 64 = 56} :=
   let n :=
-    if length % 512 < 448
-    then 448 - (length % 512)
-    else 448 + (512 - length % 512)
+    if length % 64 < 56
+    then 56 - (length % 64)
+    else 56 + (64 - length % 64)
   have n_not_zero : n > 0 := by grind
-  let b : BitVec n := BitVec.or (BitVec.twoPow n (n - 1)) (BitVec.zero n)
-  let prf : (length + n) % 512 = 448 := by grind
-  ⟨n, b, prf⟩
+  let b := ByteArray.mk (Array.replicate n 0)
+  let blen : b.size = n := by simp [b, ←ByteArray.size_data]
+  let b : ByteArray := b.set 0 0x80
+  let prf : (length + b.size) % 64 = 56 := by
+    unfold b
+    simp [←ByteArray.size_data]
+    grind
+  ⟨b, prf⟩
 
-example : (paddingNoLength 447 (by grind)).2.1 = 0x1#1 := by native_decide
-example : (paddingNoLength 446 (by grind)).2.1 = 0b10#2 := by native_decide
+example : (paddingNoLength 55).1 = ByteArray.mk #[0x80] := by native_decide
+example : (paddingNoLength 54).1 = ByteArray.mk #[0x80, 0x00] := by native_decide
 
-def padding (length : Nat) (hlen : length < 2^64) :
-    Σ n, BitVec n ×' ((length + n) % 512 = 0) :=
-  let ⟨n, b, h⟩ := paddingNoLength length hlen
-  let lenBv := BitVec.ofNat 64 length
-  have h' : (length + n + 64) % 512 = 0 := by grind
-  ⟨n + 64, BitVec.append b lenBv, h'⟩
+def UInt64.toArrayBE (n : UInt64) : Array UInt8 :=
+  #[ (n >>> (8 * 7)).toUInt8
+   , (n >>> (8 * 6)).toUInt8
+   , (n >>> (8 * 5)).toUInt8
+   , (n >>> (8 * 4)).toUInt8
+   , (n >>> (8 * 3)).toUInt8
+   , (n >>> (8 * 2)).toUInt8
+   , (n >>> (8 * 1)).toUInt8
+   , (n >>> (8 * 0)).toUInt8
+  ]
 
-#eval (padding 447 (by grind)).2.1
+def UInt32.toArrayBE (n : UInt32) : Array UInt8 :=
+  #[ (n >>> (8 * 3)).toUInt8
+   , (n >>> (8 * 2)).toUInt8
+   , (n >>> (8 * 1)).toUInt8
+   , (n >>> (8 * 0)).toUInt8
+  ]
+
+def padding (length : Nat) : {b : ByteArray // (length + b.size) % 64 = 0} :=
+  let ⟨b, h⟩ := paddingNoLength length
+  let b' := b ++ (ByteArray.mk (UInt64.toArrayBE (UInt64.ofNat (8*length))))
+  have hlen : b'.size = b.size + 8 := by simp [b', UInt64.toArrayBE, ←ByteArray.size_data]
+  have h' : (length + b'.size) % 64 = 0 := by grind
+  ⟨b', h'⟩
 
 def shaCh (x y z : BitVec 32) : BitVec 32 := (x &&& y) ||| (~~~x &&& z)
 def shaMaj (x y z : BitVec 32) : BitVec 32 := (x &&& y) ^^^ (x &&& z) ^^^ (y &&& z)
@@ -214,10 +246,10 @@ def bitVecToByteArray {n : Nat} (b : BitVec n) : ByteArray :=
 example : bitVecToByteArray (0b1010101010#10 : BitVec 10) = ByteArray.mk #[2, 170] := by
   native_decide
 
-def messageToBlocks (message : ByteArray) (hlen : message.size < 2^61) : Array ShaBlock :=
+def messageToBlocks (message : ByteArray) : Array ShaBlock :=
   let n := message.size
-  let ⟨paddingLen, padding, _⟩ := padding (8*n) (by omega)
-  let messageWithPadding := message ++ bitVecToByteArray padding
+  let ⟨padding, hpaddinglen⟩ := padding n
+  let messageWithPadding := message ++ padding
   let numBlocks := messageWithPadding.size / 64
   Array.finRange numBlocks |>.map fun (i : Fin numBlocks) =>
     let blockBytes := messageWithPadding.extract (i*64) ((i+1)*64)
@@ -227,11 +259,18 @@ def messageToBlocks (message : ByteArray) (hlen : message.size < 2^61) : Array S
       omega
     ShaBlock.ofBits ((byteArrayToBitVec blockBytes).cast (by omega))
 
-def sha256 (message : ByteArray) (hlen : message.size < 2^61) : BitVec 256 :=
-  let blocks := messageToBlocks message hlen
+def sha256 (message : ByteArray) : ByteArray :=
+  let blocks := messageToBlocks message
   let finalState := blocks.foldl shaRound ShaState.initial
   have hlen : finalState.hash.size * 32 = 256 := by simp [finalState.hhashlen]
-  (concatBitVecArray finalState.hash).cast (by simp [hlen])
+  finalState.hash.flatMap (fun bv => UInt32.toArrayBE bv.toNat.toUInt32)
+  |> ByteArray.mk
+
+def size_sha256 (message : ByteArray) : (sha256 message).size = 32 := by
+  unfold sha256
+  simp [←ByteArray.size_data, UInt32.toArrayBE]
+  conv => lhs; arg 1; arg 1; change Function.const _ 4
+  simp [Array.map_const, ShaState.hhashlen]
 
 @[grind! .]
 theorem String.utf8LengthBoundedByLength (s : String) : s.utf8ByteSize ≤ 4*s.length := by
@@ -244,28 +283,31 @@ theorem String.utf8LengthBoundedByLength (s : String) : s.utf8ByteSize ≤ 4*s.l
     have h : c.utf8Size ≤ 4 := by apply Char.utf8Size_le_four
     grind
 
-def sha256String (input : String) (hlen : input.length < 2^59) : BitVec 256 :=
-  let f := fun x => BitVec.ofNat 8 (UInt8.toNat x)
-  let ba := input.toUTF8
-  have hlen : input.toUTF8.size < 2^61 := by
-    have h : input.utf8ByteSize ≤ 4 * input.length := by apply String.utf8LengthBoundedByLength
-    simp
-    grind
-  sha256 ba hlen
+def sha256String (input : String) : ByteArray := sha256 input.toUTF8
+
+def natToByteArray (n : Nat) : ByteArray :=
+  Id.run do
+    let mut b := ByteArray.empty
+    let mut n := n
+    while n > 0 do
+      let byte := (n &&& 0xFF).toUInt8
+      b := b.push byte
+      n := n >>> 8
+    return (b.data.reverse |> ByteArray.mk)
 
 example :
-    sha256 ByteArray.empty (by simp)
-    = 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855#256 := by
+    sha256 ByteArray.empty
+    = natToByteArray 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 := by
   native_decide
 
 example :
-    sha256String (String.join (List.replicate 256 "HELLO")) (by sorry)
-    = 0x8dc54998040d81bf0a1a317085396869292a285864c6080d3e40aec35ebea923#256 := by
+    sha256String (String.join (List.replicate 256 "HELLO"))
+    = natToByteArray 0x8dc54998040d81bf0a1a317085396869292a285864c6080d3e40aec35ebea923 := by
   native_decide
 
 example :
-    sha256String (String.join (List.replicate 2 "12345678901234567890123456789")) (by sorry)
-    = 0xf55913b97a0c310ac5a5df4889c0c71474e6437e387f3cf1d6f074f6405fbf94#256 := by
+    sha256String (String.join (List.replicate 2 "12345678901234567890123456789"))
+    = natToByteArray 0xf55913b97a0c310ac5a5df4889c0c71474e6437e387f3cf1d6f074f6405fbf94 := by
   native_decide
 
 end Lush.Crypto.SHA
