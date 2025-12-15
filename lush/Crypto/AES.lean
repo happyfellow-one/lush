@@ -93,7 +93,7 @@ def sboxMapping : Array UInt8 :=
 set_option maxRecDepth 10000 in
 theorem size_sboxMapping : sboxMapping.size = 256 := by
   unfold sboxMapping
-  decide
+  native_decide
 
 def sbox (x : GF256) : GF256 :=
   have h : x.val.toNat < sboxMapping.size := by rw [size_sboxMapping]; apply UInt8.toNat_lt
@@ -114,7 +114,11 @@ def Rcon : Array UInt32 :=
    , 0x36000000
   ]
 
+theorem size_Rcon : Rcon.size = 10 := by simp [Rcon]
+
 private def rotWord (w : UInt32) := (w.toBitVec.rotateLeft 8).toNat.toUInt32
+
+example : rotWord 0x09cf4f3c = 0xcf4f3c09 := by native_decide
 
 private def subWord (w : UInt32) : UInt32 :=
   let w' := w.toArrayBE.map (fun x => (sbox (GF256.ofUInt8 x)).toUInt8)
@@ -123,6 +127,44 @@ private def subWord (w : UInt32) : UInt32 :=
   ||| (w'[1].toUInt32 <<< 16)
   ||| (w'[2].toUInt32 <<< 8)
   ||| w'[3].toUInt32
+
+example : subWord 0xcf4f3c09 = 0x8a84eb01 := by native_decide
+
+def expand
+    (key : ByteArray)
+    (hkeysize : key.size = keySize) :
+    Array UInt32 :=
+  let key :=
+    #[ UInt32.ofArrayBE (key.extract 0 4)   (by simp [ByteArray.size_extract, hkeysize])
+     , UInt32.ofArrayBE (key.extract 4 8)   (by simp [ByteArray.size_extract, hkeysize])
+     , UInt32.ofArrayBE (key.extract 8 12)  (by simp [ByteArray.size_extract, hkeysize])
+     , UInt32.ofArrayBE (key.extract 12 16) (by simp [ByteArray.size_extract, hkeysize])
+    ]
+  let Nk := keySize / 4
+  have hkeylen : key.size = Nk := by unfold key Nk; simp
+  Id.run do
+    let mut w : { w : Array UInt32 // w.size = 4*numRounds + 4 } :=
+      ⟨Array.replicate (4*numRounds + 4) 0, by simp⟩
+    for i in List.finRange (keySize / 4) do
+      have _ : i.val < 4 := by simp
+      have h : i < 4*numRounds + 4 := by simp; omega
+      let w' := ⟨w.val.set i key[i], by simp [Array.size_set, w.property]⟩
+      w := w'
+
+    for fi in List.finRange (4*numRounds + 4 - keySize / 4) do
+      let i := fi + keySize / 4
+      let mut temp := w.val[i-1]
+      have _ : i/Nk - 1 < Rcon.size := by simp [size_Rcon, Nk, i]; omega
+      if i % Nk = 0
+      then temp := subWord (rotWord temp) ^^^ (Rcon[i/Nk - 1])
+      let w' := w.val.set i (w.val[i - Nk] ^^^ temp)
+      w := ⟨w', by simp [w', Array.size_set, w.property]⟩
+    return w.val
+
+example :
+    (expand 0x2b7e151628aed2a6abf7158809cf4f3c.toByteArray (by sorry)).drop 41
+    = #[ 0xc9ee2589, 0xe13f0cc8, 0xb6630ca6 ] := by
+  native_decide
 
 end KeyExpansion
 

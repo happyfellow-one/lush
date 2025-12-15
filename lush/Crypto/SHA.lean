@@ -268,29 +268,19 @@ theorem String.utf8LengthBoundedByLength (s : String) : s.utf8ByteSize ≤ 4*s.l
 
 def sha256String (input : String) : ByteArray := sha256 input.toUTF8
 
-def natToByteArray (n : Nat) : ByteArray :=
-  Id.run do
-    let mut b := ByteArray.empty
-    let mut n := n
-    while n > 0 do
-      let byte := (n &&& 0xFF).toUInt8
-      b := b.push byte
-      n := n >>> 8
-    return (b.data.reverse |> ByteArray.mk)
-
 example :
     sha256 ByteArray.empty
-    = natToByteArray 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 := by
+    = 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.toByteArray := by
   native_decide
 
 example :
     sha256String (String.join (List.replicate 256 "HELLO"))
-    = natToByteArray 0x8dc54998040d81bf0a1a317085396869292a285864c6080d3e40aec35ebea923 := by
+    = 0x8dc54998040d81bf0a1a317085396869292a285864c6080d3e40aec35ebea923.toByteArray := by
   native_decide
 
 example :
     sha256String (String.join (List.replicate 2 "12345678901234567890123456789"))
-    = natToByteArray 0xf55913b97a0c310ac5a5df4889c0c71474e6437e387f3cf1d6f074f6405fbf94 := by
+    = 0xf55913b97a0c310ac5a5df4889c0c71474e6437e387f3cf1d6f074f6405fbf94.toByteArray := by
   native_decide
 
 end Lush.Crypto.SHA
