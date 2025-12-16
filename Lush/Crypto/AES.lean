@@ -161,6 +161,12 @@ def expand
       w := ⟨w', by simp [w', Array.size_set, w.property]⟩
     return w.val
 
+theorem size_expand
+    (key : ByteArray)
+    (hkeysize : key.size = keySize)
+    : (expand key hkeysize).size = 4*numRounds + 4 := by
+  sorry
+
 -- Taken from the NIST pdf example:
 example :
     (expand 0x2b7e151628aed2a6abf7158809cf4f3c.toByteArray (by sorry)).drop 41
@@ -193,6 +199,11 @@ def ofByteArray (b : ByteArray) (h : b.size = 16) : State :=
 
 def toByteArray (state : State) : ByteArray :=
   state.val.map GF256.toUInt8 |> ByteArray.mk
+
+def subBytes (state : State) : State :=
+  let state' := state.val.map sbox
+  have h : state'.size = 16 := by unfold state'; simp [state.hvalsize]
+  ⟨state', h⟩
 
 def shiftRows (state : State) : State :=
   Id.run do
@@ -247,6 +258,9 @@ def arrayDot (a b : Array GF256) (h : a.size = b.size) : GF256 :=
   (List.finRange a.size).map (fun i => a[i] * b[i])
   |>.sum
 
+def arrayAdd (a b : Array GF256) (h : a.size = b.size) : Array GF256 :=
+  ((List.finRange a.size).map (fun (i : Fin a.size) => a[i] + b[i])).toArray
+
 def mixColumns (state : State) : State :=
   let state :=
     (List.finRange 4).map (fun (j : Fin 4) =>
@@ -268,6 +282,58 @@ example :
        |>.val) := by
   native_decide
 
+def addRoundKey
+    (state : State)
+    (roundKeys : Array UInt32)
+    (hkeyssize : roundKeys.size = 4)
+    : State :=
+  let state' :=
+    (List.finRange 4).map (fun (j : Fin 4) =>
+      let column := state.val.extract (4*j.val) (4*(j.val + 1))
+      let keyVector := roundKeys[j].toArrayBE.map GF256.ofUInt8
+      have _ : column.size = keyVector.size := by
+        simp [column, UInt32.size_toArrayBE, state.hvalsize, keyVector]
+        omega
+      arrayAdd column keyVector (by trivial))
+    |>.foldl (· ++ ·) Array.empty
+  ⟨state', by simp [state', List.foldl, List.map, List.finRange, arrayAdd, state.hvalsize]; decide⟩
+
 end State
+
+def encrypt
+    (data : ByteArray)
+    (hdatasize : data.size = blockSize)
+    (key : ByteArray)
+    (hkeysize : key.size = keySize)
+    : ByteArray :=
+  let state := State.mk (data.data.map GF256.ofUInt8) (by simp [hdatasize])
+  let w := KeyExpansion.expand key hkeysize
+  have hwsize : w.size = 44 := by simp [w, KeyExpansion.size_expand]
+  let state := state.addRoundKey (w.extract 0 4) (by simp [w, KeyExpansion.size_expand])
+  let state :=
+    Id.run do
+      let mut s := state
+      for i in List.finRange (numRounds - 1) do
+        let round := i.val + 1
+        let roundKey := w.extract (4*round) (4*round + 4)
+        have h : roundKey.size = 4 := by
+          simp [hwsize, roundKey, round]
+          omega
+        s := s.subBytes.shiftRows.mixColumns.addRoundKey roundKey h
+      let roundKey := w.extract (4*numRounds) (4*numRounds + 4)
+      have h : roundKey.size = 4 := by
+        unfold roundKey
+        simp [Array.size_extract, hwsize, numRounds]
+      s := s.subBytes.shiftRows.addRoundKey roundKey h
+      return s
+  state.toByteArray
+
+example :
+    let key := 0x2B7E151628AED2A6ABF7158809CF4F3C.toByteArray
+    let plaintext := 0x6BC1BEE22E409F96E93D7E117393172A.toByteArray
+    let encrypted := encrypt plaintext (by native_decide) key (by native_decide)
+    let expected := 0x3AD77BB40D7A3660A89ECAF32466EF97.toByteArray
+    encrypted = expected := by
+  native_decide
 
 end Lush.Crypto.AES
