@@ -161,6 +161,7 @@ def expand
       w := ⟨w', by simp [w', Array.size_set, w.property]⟩
     return w.val
 
+-- Taken from the NIST pdf example:
 example :
     (expand 0x2b7e151628aed2a6abf7158809cf4f3c.toByteArray (by sorry)).drop 41
     = #[ 0xc9ee2589, 0xe13f0cc8, 0xb6630ca6 ] := by
@@ -186,9 +187,12 @@ def index
   state.val[row + 4*col]
 
 def ofByteArray (b : ByteArray) (h : b.size = 16) : State :=
-  sorry
+  let val := b.data.map GF256.ofUInt8
+  have hvalsize : val.size = 16 := by unfold val; simp; exact h
+  ⟨val, hvalsize⟩
 
-def toByteArray (state : State) : ByteArray := sorry
+def toByteArray (state : State) : ByteArray :=
+  state.val.map GF256.toUInt8 |> ByteArray.mk
 
 end State
 
