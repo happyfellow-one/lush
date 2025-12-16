@@ -232,6 +232,42 @@ example :
     state.shiftRows.shiftRows.shiftRows.shiftRows.val = state.val := by
   native_decide
 
+def mixColumnsMatrixRow : Array GF256 :=
+  #[ 0x02, 0x03, 0x01, 0x01 ].map GF256.ofUInt8
+
+def arrayRotateRight (a : Array α) (n : Nat) : Array α :=
+  let n := n % a.size
+  a.extract (a.size - n) a.size ++ a.extract 0 (a.size - n)
+
+theorem size_arrayRotateRight (a : Array α) (n : Nat) :
+    (arrayRotateRight a n).size = a.size := by
+  simp [arrayRotateRight, Array.size_extract]
+
+def arrayDot (a b : Array GF256) (h : a.size = b.size) : GF256 :=
+  (List.finRange a.size).map (fun i => a[i] * b[i])
+  |>.sum
+
+def mixColumns (state : State) : State :=
+  let state :=
+    (List.finRange 4).map (fun (j : Fin 4) =>
+      let column := state.val.extract (4*j.val) (4*(j.val + 1))
+      (List.finRange 4).map (fun (i : Fin 4) =>
+        let vector := arrayRotateRight mixColumnsMatrixRow i
+        have _ : column.size = vector.size := by
+          simp [column, vector, state.hvalsize, size_arrayRotateRight, mixColumnsMatrixRow]
+          omega
+        arrayDot column vector (by trivial))
+        |>.toArray)
+    |>.foldl (· ++ ·) Array.empty
+  ⟨state, by simp [state, List.foldl, List.map, List.finRange]; decide⟩
+
+example :
+    (ofByteArray 0x09287F476F746ABF2C4A6204DA08E3EE.toByteArray (by sorry)
+    |> mixColumns |>.val)
+    = (ofByteArray 0x529F16C2978615CAE01AAE54BA1A2659.toByteArray (by sorry)
+       |>.val) := by
+  native_decide
+
 end State
 
 end Lush.Crypto.AES
