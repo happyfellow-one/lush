@@ -194,6 +194,44 @@ def ofByteArray (b : ByteArray) (h : b.size = 16) : State :=
 def toByteArray (state : State) : ByteArray :=
   state.val.map GF256.toUInt8 |> ByteArray.mk
 
+def shiftRows (state : State) : State :=
+  Id.run do
+    let mut state' : { a : Array GF256 // a.size = 16 } := ⟨Array.replicate 16 0, by simp⟩
+    for i in List.finRange 4 do
+      for j in List.finRange 4 do
+        let row := i.val
+        let col := (i.val + j.val) % 4
+        have _ : row + 4*col < state.val.size := by unfold row col; simp [state.hvalsize]; omega
+        have _ : row < 4 := by omega
+        have _ : col < 4 := by omega
+        let elem := state.index row col (by trivial) (by trivial)
+        state' := ⟨state'.val.set (i + 4*j) elem, by simp [Array.size_set, state'.property]⟩
+    return ⟨state'.val, state'.property⟩
+
+example :
+    let state :=
+      ofByteArray
+        (Array.range 16 |>.map (·.toUInt8) |> ByteArray.mk)
+        (by simp [←ByteArray.size_data])
+    let state' :=
+      ofByteArray
+        (ByteArray.mk
+          #[ 0, 5, 10, 15,
+             4, 9, 14, 3,
+             8, 13, 2, 7,
+             12, 1, 6, 11 ])
+        (by simp [←ByteArray.size_data])
+    state.shiftRows.val = state'.val := by
+  native_decide
+
+example :
+    let state :=
+      ofByteArray
+        (Array.range 16 |>.map (·.toUInt8) |> ByteArray.mk)
+        (by simp [←ByteArray.size_data])
+    state.shiftRows.shiftRows.shiftRows.shiftRows.val = state.val := by
+  native_decide
+
 end State
 
 end Lush.Crypto.AES
