@@ -133,7 +133,7 @@ example : subWord 0xcf4f3c09 = 0x8a84eb01 := by native_decide
 def expand
     (key : ByteArray)
     (hkeysize : key.size = keySize) :
-    Array UInt32 :=
+    { w : Array UInt32 // w.size = 4*numRounds + 4 } :=
   let key :=
     #[ UInt32.ofArrayBE (key.extract 0 4)   (by simp [ByteArray.size_extract, hkeysize])
      , UInt32.ofArrayBE (key.extract 4 8)   (by simp [ByteArray.size_extract, hkeysize])
@@ -159,17 +159,11 @@ def expand
       then temp := subWord (rotWord temp) ^^^ (Rcon[i/Nk - 1])
       let w' := w.val.set i (w.val[i - Nk] ^^^ temp)
       w := ⟨w', by simp [w', Array.size_set, w.property]⟩
-    return w.val
-
-theorem size_expand
-    (key : ByteArray)
-    (hkeysize : key.size = keySize)
-    : (expand key hkeysize).size = 4*numRounds + 4 := by
-  sorry
+    return w
 
 -- Taken from the NIST pdf example:
 example :
-    (expand 0x2b7e151628aed2a6abf7158809cf4f3c.toByteArray (by sorry)).drop 41
+    (expand 0x2b7e151628aed2a6abf7158809cf4f3c.toByteArray (by native_decide)).val.drop 41
     = #[ 0xc9ee2589, 0xe13f0cc8, 0xb6630ca6 ] := by
   native_decide
 
@@ -199,6 +193,9 @@ def ofByteArray (b : ByteArray) (h : b.size = 16) : State :=
 
 def toByteArray (state : State) : ByteArray :=
   state.val.map GF256.toUInt8 |> ByteArray.mk
+
+theorem size_toByteArray (state : State) : state.toByteArray.size = 16 := by
+  simp [toByteArray, ←ByteArray.size_data, state.hvalsize]
 
 def subBytes (state : State) : State :=
   let state' := state.val.map sbox
@@ -276,9 +273,9 @@ def mixColumns (state : State) : State :=
   ⟨state, by simp [state, List.foldl, List.map, List.finRange]; decide⟩
 
 example :
-    (ofByteArray 0x09287F476F746ABF2C4A6204DA08E3EE.toByteArray (by sorry)
+    (ofByteArray 0x09287F476F746ABF2C4A6204DA08E3EE.toByteArray (by native_decide)
     |> mixColumns |>.val)
-    = (ofByteArray 0x529F16C2978615CAE01AAE54BA1A2659.toByteArray (by sorry)
+    = (ofByteArray 0x529F16C2978615CAE01AAE54BA1A2659.toByteArray (by native_decide)
        |>.val) := by
   native_decide
 
@@ -300,16 +297,17 @@ def addRoundKey
 
 end State
 
-def encrypt
+def encrypt'
     (data : ByteArray)
     (hdatasize : data.size = blockSize)
     (key : ByteArray)
     (hkeysize : key.size = keySize)
-    : ByteArray :=
+    : State :=
   let state := State.mk (data.data.map GF256.ofUInt8) (by simp [hdatasize])
-  let w := KeyExpansion.expand key hkeysize
-  have hwsize : w.size = 44 := by simp [w, KeyExpansion.size_expand]
-  let state := state.addRoundKey (w.extract 0 4) (by simp [w, KeyExpansion.size_expand])
+  let w' := KeyExpansion.expand key hkeysize
+  let w := w'.val
+  have hwsize : w.size = 44 := by simp [w, w'.property]
+  let state := state.addRoundKey (w.extract 0 4) (by simp [w, w'.property])
   let state :=
     Id.run do
       let mut s := state
@@ -326,7 +324,25 @@ def encrypt
         simp [Array.size_extract, hwsize, numRounds]
       s := s.subBytes.shiftRows.addRoundKey roundKey h
       return s
+  state
+
+def encrypt
+    (data : ByteArray)
+    (hdatasize : data.size = blockSize)
+    (key : ByteArray)
+    (hkeysize : key.size = keySize)
+    : ByteArray :=
+  let state := encrypt' data hdatasize key hkeysize
   state.toByteArray
+
+theorem size_encrypt
+    (data : ByteArray)
+    (hdatasize : data.size = blockSize)
+    (key : ByteArray)
+    (hkeysize : key.size = keySize)
+    : (encrypt data hdatasize key hkeysize).size = blockSize := by
+  unfold encrypt
+  simp [State.size_toByteArray]
 
 example :
     let key := 0x2B7E151628AED2A6ABF7158809CF4F3C.toByteArray
@@ -335,5 +351,34 @@ example :
     let expected := 0x3AD77BB40D7A3660A89ECAF32466EF97.toByteArray
     encrypted = expected := by
   native_decide
+
+namespace CTR
+
+def crypt
+    (key : ByteArray)
+    (hkeysize : key.size = keySize)
+    (iv : BitVec 128)
+    (packet : ByteArray)
+    : ByteArray :=
+  let chunkSize := 16
+  let numChunks := (packet.size + chunkSize - 1) / chunkSize
+  Id.run do
+    let mut acc := ByteArray.empty
+    let mut ctr := iv
+    for i in [:numChunks] do
+      let chunk := packet.extract (i * chunkSize) ((i+1) * chunkSize)
+      have hchunksize : chunk.size ≤ chunkSize := by
+        simp only [chunk, ByteArray.size_extract]; omega
+      let keystreamBlock :=
+        encrypt ctr.toByteArrayBE (by simp [BitVec.size_toByteArrayBE]) key hkeysize
+      have hkeystreamsize : keystreamBlock.size = chunkSize := by
+        simp [keystreamBlock, size_encrypt, chunkSize]
+      ctr := ctr + 1
+      let mut cipherBlock := ByteArray.empty
+      for j in [:chunk.size] do
+        cipherBlock := cipherBlock.push (chunk[j]! ^^^ keystreamBlock[j]!)
+      acc := acc.append cipherBlock
+    return acc
+end CTR
 
 end Lush.Crypto.AES

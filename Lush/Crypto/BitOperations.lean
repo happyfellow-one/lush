@@ -72,3 +72,19 @@ def toNat (b : ByteArray) : Nat :=
     n
 
 end ByteArray
+
+namespace BitVec
+
+def toByteArrayBE (b : BitVec n) : ByteArray :=
+  let bytes := (n + 7) / 8
+  ByteArray.mk <|
+  Array.ofFn (fun (i : Fin bytes) =>
+    b.extractLsb' (i * 8) 8 |>.toNat.toUInt8)
+  |> Array.reverse
+
+theorem size_toByteArrayBE
+    (b : BitVec n)
+    : b.toByteArrayBE.size = (n + 7) / 8 := by
+  simp [toByteArrayBE, ←ByteArray.size_data]
+
+end BitVec
